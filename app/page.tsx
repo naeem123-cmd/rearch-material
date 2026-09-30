@@ -748,6 +748,45 @@ function Requests({ sites, items, trades, requests, reload, canApprove }: any) {
     if (!user) return;
 
     const item = items.find((i: any) => i.id === itemId);
+    const qty = Number(quantity);
+
+    if (!siteId || !itemId || !quantity || qty <= 0) {
+      alert("Please select a site, material and valid quantity.");
+      return;
+    }
+
+    // Prevent accidental repeat requests for the same site/material while a request is pending.
+    const { data: duplicate } = await supabase
+      .from("material_requests")
+      .select("id, quantity, status, created_at")
+      .eq("site_id", siteId)
+      .eq("item_id", itemId)
+      .eq("status", "pending")
+      .limit(1)
+      .maybeSingle();
+
+    if (duplicate) {
+      alert(
+        `A pending request already exists for ${item?.name || "this material"} at this site (${duplicate.quantity} ${item?.unit || "units"}). Check Requests before creating another one.`
+      );
+      return;
+    }
+
+    // Check existing site stock before purchasing/requesting fresh material.
+    const { data: siteStock } = await supabase
+      .from("stock")
+      .select("quantity")
+      .eq("site_id", siteId)
+      .eq("item_id", itemId)
+      .maybeSingle();
+
+    const availableStock = Number(siteStock?.quantity || 0);
+    if (availableStock > 0) {
+      const proceed = window.confirm(
+        `${availableStock} ${item?.unit || "units"} of ${item?.name || "this material"} is already recorded at this site.\n\nDo you still want to create a new request for ${qty} ${item?.unit || "units"}?`
+      );
+      if (!proceed) return;
+    }
 
     const { error } = await supabase
       .from("material_requests")
@@ -756,11 +795,12 @@ function Requests({ sites, items, trades, requests, reload, canApprove }: any) {
         trade_id: tradeId || null,
         item_id: itemId,
         requested_by: user.id,
-        quantity: Number(quantity),
+        quantity: qty,
         unit: item?.unit || "pcs",
         urgency,
         required_date: requiredDate || null,
         purpose,
+        status: "pending",
       });
 
     if (error) {
