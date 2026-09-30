@@ -17,6 +17,7 @@ import {
   RefreshCw,
   ArrowUpRight,
   IndianRupee,
+  ShieldCheck,
 } from "lucide-react";
 
 type Tab =
@@ -27,6 +28,16 @@ type Tab =
   | "vendors"
   | "purchases"
   | "stock";
+
+type UserRole = "admin" | "project_manager" | "site_supervisor" | "worker";
+
+function normalizeRole(role: any): UserRole {
+  const value = String(role || "worker").toLowerCase().replace(/[-\s]+/g, "_");
+  if (value === "admin" || value === "administrator") return "admin";
+  if (value === "project_manager" || value === "manager" || value === "pm") return "project_manager";
+  if (value === "site_supervisor" || value === "supervisor") return "site_supervisor";
+  return "worker";
+}
 
 export default function Home() {
   const [session, setSession] = useState<any>(null);
@@ -72,7 +83,7 @@ export default function Home() {
       .eq("id", userId)
       .maybeSingle();
 
-    setProfile(data);
+    setProfile(data || { id: userId, role: "worker" });
   }
 
   async function loadAll() {
@@ -392,15 +403,26 @@ function Dashboard({
     0
   );
 
+  const role = normalizeRole(profile?.role);
+  const canApprove = role === "admin" || role === "project_manager";
+  const canManageMasterData = role === "admin" || role === "project_manager";
+  const canPurchase = role === "admin" || role === "project_manager";
+  const canStock = role !== "worker";
+
   const nav = [
-    ["dashboard", "Dashboard", LayoutDashboard],
-    ["requests", "Requests", ClipboardList],
-    ["sites", "Sites", Building2],
-    ["items", "Materials", Package],
-    ["vendors", "Vendors", Truck],
-    ["purchases", "Purchases", IndianRupee],
-    ["stock", "Stock", Boxes],
-  ];
+    ["dashboard", "Dashboard", LayoutDashboard, true],
+    ["requests", "Requests", ClipboardList, true],
+    ["sites", "Sites", Building2, canManageMasterData],
+    ["items", "Materials", Package, canManageMasterData],
+    ["vendors", "Vendors", Truck, canManageMasterData],
+    ["purchases", "Purchases", IndianRupee, canPurchase],
+    ["stock", "Stock", Boxes, canStock],
+  ].filter(([, , , allowed]: any) => allowed);
+
+  useEffect(() => {
+    const allowed = nav.map(([id]: any) => id);
+    if (!allowed.includes(tab)) setTab("dashboard");
+  }, [role]);
 
   return (
     <main className="min-h-screen bg-[#050505] text-white flex">
@@ -451,7 +473,7 @@ function Dashboard({
               {profile?.full_name || "User"}
             </p>
             <p className="text-xs text-yellow-400 mt-1 uppercase">
-              {profile?.role || "team"}
+              {role.replace("_", " ")}
             </p>
           </div>
 
@@ -493,6 +515,13 @@ function Dashboard({
         </header>
 
         <div className="p-5 md:p-8 max-w-[1500px] mx-auto">
+          <div className="mb-5 flex items-center gap-3 rounded-xl border border-yellow-400/10 bg-yellow-400/[0.03] px-4 py-3">
+            <ShieldCheck size={17} className="text-yellow-400 shrink-0" />
+            <p className="text-xs text-white/50">
+              Access level: <span className="text-white/80 font-semibold capitalize">{role.replace("_", " ")}</span>
+              {canApprove ? " • Approval access enabled" : " • Approval access restricted"}
+            </p>
+          </div>
 
           {tab === "dashboard" && (
             <Overview
@@ -513,6 +542,7 @@ function Dashboard({
               trades={trades}
               requests={requests}
               reload={reload}
+              canApprove={canApprove}
             />
           )}
 
@@ -696,7 +726,7 @@ function Overview({
    REQUESTS
 ========================================================= */
 
-function Requests({ sites, items, trades, requests, reload }: any) {
+function Requests({ sites, items, trades, requests, reload, canApprove }: any) {
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -749,6 +779,7 @@ function Requests({ sites, items, trades, requests, reload }: any) {
   }
 
   async function updateRequest(id: string, status: string) {
+    if (!canApprove) return;
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -937,7 +968,7 @@ function Requests({ sites, items, trades, requests, reload }: any) {
                   </td>
 
                   <td className="p-4">
-                    {r.status === "pending" && (
+                    {r.status === "pending" && canApprove && (
                       <div className="flex justify-end gap-2">
 
                         <button
