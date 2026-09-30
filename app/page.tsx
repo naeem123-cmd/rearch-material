@@ -16,6 +16,7 @@ import {
   Search,
   RefreshCw,
   ArrowUpRight,
+  ArrowRightLeft,
   IndianRupee,
   ShieldCheck,
 } from "lucide-react";
@@ -569,7 +570,7 @@ function Dashboard({
           )}
 
           {tab === "stock" && (
-            <Stock stock={stock} reload={reload} />
+            <Stock stock={stock} sites={sites} items={items} reload={reload} />
           )}
 
         </div>
@@ -1668,16 +1669,196 @@ function Purchases({
    STOCK
 ========================================================= */
 
-function Stock({ stock }: any) {
+function Stock({ stock, sites, items, reload }: any) {
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [fromSite, setFromSite] = useState("");
+  const [toSite, setToSite] = useState("");
+  const [itemId, setItemId] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const sourceStock = stock.find(
+    (s: any) => s.site_id === fromSite && s.item_id === itemId
+  );
+  const available = Number(sourceStock?.quantity || 0);
+  const selectedItem = items.find((i: any) => i.id === itemId);
+
+  async function transferStock(e: FormEvent) {
+    e.preventDefault();
+
+    const qty = Number(quantity);
+    if (!fromSite || !toSite || !itemId || qty <= 0) {
+      alert("Select source site, destination site, material and valid quantity.");
+      return;
+    }
+    if (fromSite === toSite) {
+      alert("Source and destination site cannot be the same.");
+      return;
+    }
+    if (qty > available) {
+      alert(`Only ${available} ${selectedItem?.unit || "units"} available at the source site.`);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Please sign in again.");
+
+      const { data: destination } = await supabase
+        .from("stock")
+        .select("*")
+        .eq("site_id", toSite)
+        .eq("item_id", itemId)
+        .maybeSingle();
+
+      const { error: sourceError } = await supabase
+        .from("stock")
+        .update({
+          quantity: available - qty,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", sourceStock.id);
+
+      if (sourceError) throw sourceError;
+
+      if (destination) {
+        const { error } = await supabase
+          .from("stock")
+          .update({
+            quantity: Number(destination.quantity || 0) + qty,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", destination.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("stock").insert({
+          site_id: toSite,
+          item_id: itemId,
+          quantity: qty,
+        });
+        if (error) throw error;
+      }
+
+      await supabase.from("stock_transactions").insert([
+        {
+          site_id: fromSite,
+          item_id: itemId,
+          transaction_type: "transfer_out",
+          quantity: qty,
+          notes: `Transfer to site${notes ? ` • ${notes}` : ""}`,
+          created_by: user.id,
+        },
+        {
+          site_id: toSite,
+          item_id: itemId,
+          transaction_type: "transfer_in",
+          quantity: qty,
+          notes: `Transfer from site${notes ? ` • ${notes}` : ""}`,
+          created_by: user.id,
+        },
+      ]);
+
+      setShowTransfer(false);
+      setFromSite("");
+      setToSite("");
+      setItemId("");
+      setQuantity("");
+      setNotes("");
+      await reload();
+      alert("Stock transferred successfully.");
+    } catch (error: any) {
+      alert(error?.message || "Stock transfer failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div>
-      <PageTitle
-        title="Stock"
-        subtitle="Live material stock across all project sites."
-      />
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <PageTitle
+          title="Stock"
+          subtitle="Live material stock across all project sites."
+        />
+
+        <button
+          onClick={() => setShowTransfer(!showTransfer)}
+          className="bg-yellow-400 text-black rounded-xl px-5 py-3 font-semibold flex items-center justify-center gap-2"
+        >
+          <ArrowRightLeft size={17} />
+          Transfer Stock
+        </button>
+      </div>
+
+      {showTransfer && (
+        <form
+          onSubmit={transferStock}
+          className="mt-6 border border-yellow-400/20 bg-yellow-400/[0.03] rounded-2xl p-6"
+        >
+          <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <Select
+              label="From Site"
+              value={fromSite}
+              onChange={setFromSite}
+              options={sites.filter((s: any) => s.id !== toSite).map((s: any) => ({ value: s.id, label: s.name }))}
+            />
+            <Select
+              label="To Site"
+              value={toSite}
+              onChange={setToSite}
+              options={sites.filter((s: any) => s.id !== fromSite).map((s: any) => ({ value: s.id, label: s.name }))}
+            />
+            <Select
+              label="Material"
+              value={itemId}
+              onChange={setItemId}
+              options={items.map((i: any) => ({ value: i.id, label: `${i.name} (${i.unit || "pcs"})` }))}
+            />
+            <Input
+              label={`Quantity${available ? ` • Available ${available}` : ""}`}
+              type="number"
+              value={quantity}
+              onChange={setQuantity}
+              placeholder="0"
+            />
+          </div>
+
+          <div className="mt-4">
+            <Input
+              label="Note (optional)"
+              value={notes}
+              onChange={setNotes}
+              placeholder="e.g. Surplus plywood moved to Site B"
+            />
+          </div>
+
+          {itemId && fromSite && (
+            <p className="mt-4 text-sm text-white/50">
+              Available at source: <span className="text-yellow-400 font-semibold">{available} {selectedItem?.unit || "units"}</span>
+            </p>
+          )}
+
+          <div className="flex gap-3 mt-5">
+            <button
+              disabled={saving}
+              className="bg-yellow-400 text-black rounded-xl px-5 py-3 font-semibold disabled:opacity-50"
+            >
+              {saving ? "Transferring..." : "Confirm Transfer"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowTransfer(false)}
+              className="border border-white/10 rounded-xl px-5 py-3 text-white/60"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4 mt-6">
-
         {stock.map((s: any) => (
           <div
             key={s.id}
@@ -1685,30 +1866,15 @@ function Stock({ stock }: any) {
           >
             <div className="flex justify-between">
               <Boxes className="text-yellow-400" />
-
-              <span className="text-xs text-white/30">
-                LIVE
-              </span>
+              <span className="text-xs text-white/30">LIVE</span>
             </div>
 
-            <h3 className="font-bold text-lg mt-6">
-              {s.items?.name}
-            </h3>
-
-            <p className="text-sm text-white/40 mt-1">
-              {s.sites?.name}
-            </p>
-
-            <p className="text-4xl font-bold mt-5">
-              {s.quantity}
-            </p>
-
-            <p className="text-sm text-white/30">
-              {s.items?.unit}
-            </p>
+            <h3 className="font-bold text-lg mt-6">{s.items?.name}</h3>
+            <p className="text-sm text-white/40 mt-1">{s.sites?.name}</p>
+            <p className="text-4xl font-bold mt-5">{s.quantity}</p>
+            <p className="text-sm text-white/30">{s.items?.unit}</p>
           </div>
         ))}
-
       </div>
 
       {stock.length === 0 && (
